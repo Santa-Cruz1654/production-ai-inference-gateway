@@ -2,9 +2,9 @@
 
 > An actively developed, production-oriented AI inference gateway built incrementally to explore reliable LLM infrastructure, backend engineering, system design, and AI platform engineering.
 
-This project is being built as an engineering learning sprint rather than as a simple wrapper around an LLM API.
+This project is being developed as an engineering learning sprint rather than as a simple wrapper around an LLM API.
 
-The goal is to understand what is required to move from:
+The objective is to understand what is required to move from:
 
 ```text
 "Call an LLM API"
@@ -16,7 +16,7 @@ to:
 "Build a reliable backend service around LLM providers"
 ```
 
-The system is being developed incrementally, with each stage introducing a deeper production engineering concept.
+The system is intentionally being developed incrementally. Each stage introduces a new production engineering problem, followed by implementation, testing, debugging, and architectural refinement.
 
 ---
 
@@ -29,7 +29,7 @@ The system is being developed incrementally, with each stage introducing a deepe
 **Completed**
 
 * FastAPI application foundation
-* Versioned inference endpoint
+* Versioned inference API
 * Pydantic request/response validation
 * Logical model abstraction
 * Provider abstraction
@@ -37,53 +37,52 @@ The system is being developed incrementally, with each stage introducing a deepe
 * Provider registry
 * Provider selection
 * Model routing
-* Authentication
+* API-key-style authentication
 * Rate limiting
 * Request ID / correlation mechanism
 * Explicit timeout/deadline handling
-* Basic provider error boundaries
+* Basic error boundaries
 * Unit testing
 * Runtime API testing
 * Environment-based configuration
 * Dependency-chain refactoring
 * Initial production-oriented project structure
 
-The project is intentionally **not considered complete**.
-
-Future stages will build on this foundation with additional reliability, observability, deployment, and production-hardening capabilities.
+Day 1 intentionally focuses on the architectural foundation rather than attempting to build the entire production platform at once.
 
 ---
 
 # Why Build an Inference Gateway?
 
-Directly integrating an application with an LLM provider is easy:
+A direct LLM integration can be extremely simple:
 
 ```text
 Application
-    ↓
+    │
+    ▼
 LLM Provider
 ```
 
-But production systems introduce additional problems:
+Real backend systems introduce additional engineering problems:
 
-* Which model should handle the request?
-* What happens when the provider fails?
-* What happens when the provider rate-limits us?
-* How long should the application wait?
-* How should requests be authenticated?
+* How should clients authenticate?
+* How should requests be validated?
+* Which model should handle a request?
+* What happens when a provider fails?
+* How long should the gateway wait?
 * How should clients be rate-limited?
-* How do we switch providers without rewriting the application?
-* How do we test provider-dependent code?
-* How do we identify a request across different layers?
-* What should be exposed to the client when something goes wrong?
+* How can providers be changed without rewriting application logic?
+* How can provider-dependent code be tested?
+* How can individual requests be correlated across the system?
+* What information should be exposed when something fails?
 
-This project explores those problems through implementation rather than treating them as purely theoretical system-design topics.
+This project explores those problems through implementation rather than treating them purely as system-design theory.
 
 ---
 
-# Current Architecture
+# Day 1 Architecture
 
-The current Day 1 architecture is intentionally small.
+The current architecture is intentionally small.
 
 ```text
                          Client
@@ -111,14 +110,12 @@ The current Day 1 architecture is intentionally small.
                            │
                            ▼
                   ┌─────────────────┐
-                  │ Model Service   │
-                  │ / Model Select  │
+                  │ Model Resolution│
                   └────────┬────────┘
                            │
                            ▼
                   ┌─────────────────┐
-                  │ Provider        │
-                  │ Service         │
+                  │ Provider Service│
                   └────────┬────────┘
                            │
                            ▼
@@ -139,24 +136,19 @@ The current Day 1 architecture is intentionally small.
                   Normalized Response
 ```
 
-The important architectural decision is that the application does **not** directly depend on the Groq SDK throughout the codebase.
+The central design decision is that the application does **not** directly depend on the Groq SDK throughout the codebase.
 
 Instead:
 
 ```text
-Application
-     │
-     ▼
-LLMProvider abstraction
-     │
-     ├── GroqProvider
-     │
-     ├── Future Provider
-     │
-     └── Future Local Provider
+                    LLMProvider
+                         │
+             ┌───────────┼───────────┐
+             ▼           ▼           ▼
+        GroqProvider  FutureProvider  LocalProvider
 ```
 
-This keeps provider-specific implementation isolated.
+The provider boundary allows the application to depend on an abstraction rather than a specific vendor implementation.
 
 ---
 
@@ -168,109 +160,57 @@ A request to:
 POST /v1/inference
 ```
 
-currently follows a controlled dependency chain.
+passes through the following flow:
 
 ```text
 Client
   │
   ▼
-Request ID middleware
+Request ID Middleware
   │
   ▼
 Authentication
   │
   ▼
-Rate limiting
+Rate Limiting
   │
   ▼
-Pydantic validation
+Pydantic Validation
   │
   ▼
-Model resolution
+Model Resolution
   │
   ▼
-Model constraints validation
+Model Constraint Validation
   │
   ▼
-Provider candidate resolution
+Provider Candidate Resolution
   │
   ▼
-Provider registry
+Provider Registry
   │
   ▼
-Provider adapter
+Provider Adapter
   │
   ▼
 Groq API
   │
   ▼
-Provider response normalization
+Response Normalization
   │
   ▼
-Gateway response
+Gateway Response
 ```
 
-This separation became an important part of Day 1.
-
-Rather than putting the entire request flow inside a single FastAPI route, responsibilities were progressively separated into services and abstractions.
+The implementation deliberately separates these responsibilities instead of placing the entire request lifecycle inside one FastAPI route.
 
 ---
 
-# Core Engineering Concepts
+# Logical Models vs Provider Models
 
-Day 1 focused on the foundations required before adding more advanced distributed-system behaviour.
+One of the most important Day 1 architectural decisions is separating the model exposed to the client from the model identifier used by the provider.
 
-## 1. API Design
-
-The gateway exposes a versioned inference endpoint:
-
-```text
-POST /v1/inference
-```
-
-Basic service endpoints:
-
-```text
-GET /
-GET /health
-```
-
-The API uses structured request and response schemas.
-
----
-
-## 2. Request Validation
-
-Requests are validated using Pydantic.
-
-The inference request currently contains:
-
-```json
-{
-  "model": "fast-model",
-  "prompt": "Say hello in one sentence.",
-  "temperature": 0.2,
-  "max_tokens": 100
-}
-```
-
-Validation covers constraints such as:
-
-* required model
-* required prompt
-* temperature bounds
-* positive token limits
-* rejection of unexpected request fields
-
-This prevents malformed requests from reaching the provider layer.
-
----
-
-# 3. Logical Model Abstraction
-
-The gateway exposes logical models rather than forcing clients to know provider-specific model identifiers.
-
-For example:
+The gateway exposes logical models such as:
 
 ```text
 fast-model
@@ -278,19 +218,16 @@ quality-model
 reasoning-model
 ```
 
-The gateway internally maps these logical models to provider configurations.
+while the provider layer maps those logical models to provider-specific model IDs.
 
-Conceptually:
+For example:
 
 ```text
 Client
   │
-  │ "fast-model"
+  │ fast-model
   ▼
-Gateway
-  │
-  ▼
-Model Registry
+Gateway Model Registry
   │
   ▼
 Provider Routing
@@ -299,56 +236,63 @@ Provider Routing
 Groq
   │
   ▼
-Provider Model
+openai/gpt-oss-20b
 ```
 
-This creates a separation between:
+This prevents provider-specific model identifiers from leaking throughout the application.
 
-```text
-Application-facing model identity
-```
+It also means a provider model can change without forcing clients to change their API requests.
 
-and:
-
-```text
-Provider-specific model identity
-```
+Groq currently lists `openai/gpt-oss-20b` as a production model, with a 131,072-token context window and 65,536 maximum completion tokens. Model availability can change, so provider model identifiers remain isolated inside the routing/configuration layer.
 
 ---
 
-# 4. Provider Abstraction
+# Provider Abstraction
 
-One of the main architectural goals of Day 1 was avoiding provider-specific code throughout the application.
-
-The gateway defines a provider abstraction:
+The gateway defines a common provider interface:
 
 ```text
 LLMProvider
 ```
 
-The Groq implementation provides the concrete adapter:
+The current concrete implementation is:
 
 ```text
 GroqProvider
 ```
 
-The application can therefore interact with the provider through a common interface.
-
-Conceptually:
+The application therefore follows the conceptual dependency:
 
 ```text
+Application
+     │
+     ▼
 LLMProvider
      │
-     └── GroqProvider
+     ▼
+GroqProvider
+     │
+     ▼
+Groq SDK
 ```
 
-Future providers can be introduced without rewriting the entire inference pipeline.
+This introduces several important backend engineering concepts:
+
+* abstraction
+* interfaces
+* dependency inversion
+* adapter pattern
+* provider portability
+* testability
+* separation of concerns
+
+A future provider can be introduced without rewriting the entire inference pipeline.
 
 ---
 
-# 5. Provider Registry
+# Provider Registry
 
-Providers are registered through a provider registry.
+Providers are registered through a dedicated registry.
 
 Conceptually:
 
@@ -358,23 +302,25 @@ ProviderRegistry
 groq → GroqProvider
 ```
 
-The registry separates:
+The registry is responsible for provider lookup rather than embedding provider construction throughout the application.
 
-* provider registration
-* provider lookup
-* provider implementation
+This creates a clean boundary between:
 
-This also creates a clean boundary for testing and future provider expansion.
+```text
+Provider registration
+        ↓
+Provider lookup
+        ↓
+Provider implementation
+```
 
 ---
 
-# 6. Provider Selection
+# Model Routing
 
-Provider selection is separated from the API route.
+The routing layer maps logical gateway models to provider candidates.
 
-The current routing model is intentionally simple.
-
-A logical model can map to one or more provider candidates:
+Current routing is intentionally simple:
 
 ```text
 fast-model
@@ -384,88 +330,83 @@ Groq
 openai/gpt-oss-20b
 ```
 
-The provider-specific model identifier is therefore not scattered throughout the application.
+The architecture is designed so routing can become more sophisticated later.
+
+Potential future routing criteria include:
+
+* latency
+* model capability
+* cost
+* provider availability
+* task type
+* context requirements
+
+Day 1 deliberately does not implement complex intelligent routing before the basic architecture is reliable.
 
 ---
 
-# 7. Configuration
+# Authentication
 
-Secrets and environment-specific configuration are kept outside the application source code.
+The inference endpoint requires authentication.
 
-For example:
+The current development implementation uses an API-key-style bearer token:
 
-```text
-GROQ_API_KEY
-```
-
-is loaded from the environment.
-
-A real API key should never be committed to Git.
-
-A `.env` file is used locally, while `.env.example` is intended to document the expected configuration without containing real secrets.
-
----
-
-# 8. Authentication
-
-The inference endpoint requires an authenticated request.
-
-The current development authentication flow uses an API-key-style bearer token.
-
-Example:
-
-```text
+```http
 Authorization: Bearer gateway-dev-key
 ```
 
-The important architectural distinction is:
+The architectural distinction is:
 
 ```text
 Authentication
-    =
-Who are you?
+    ↓
+Who is making the request?
 ```
 
 versus:
 
 ```text
 Authorization
-    =
-What are you allowed to do?
+    ↓
+What is that requester allowed to do?
 ```
 
 Day 1 establishes the authentication boundary.
 
-More advanced identity, tenant management, key rotation, and authorization policies are future work.
+More advanced capabilities such as:
+
+* tenant identity
+* key rotation
+* scoped permissions
+* production secret management
+* advanced authorization policies
+
+remain future work.
 
 ---
 
-# 9. Rate Limiting
+# Rate Limiting
 
-The gateway includes request rate limiting as an early protection mechanism.
+The gateway includes rate limiting as an early protection mechanism.
 
-The purpose is not merely performance.
+Rate limiting is important because the gateway sits between clients and an external LLM dependency.
 
-Rate limiting helps protect:
+It can protect:
 
 * provider quotas
 * application resources
+* downstream dependencies
 * infrastructure
-* downstream services
-* cost
 * availability
+* cost
 
-This also introduced an important production concept:
+The current implementation is intentionally simple.
 
-> A gateway is a control point between clients and expensive downstream dependencies.
-
-A future production implementation can evolve toward distributed rate limiting backed by Redis.
-
-That is intentionally not required for the current minimal architecture.
+A future production architecture can evolve toward distributed rate limiting using Redis when there is an actual requirement for distributed state.
 
 ---
 
-# 10. Request IDs
+# Request IDs
 
 The gateway generates or accepts a request identifier.
 
@@ -478,14 +419,18 @@ Client
   ▼
 Gateway
   │
-  ├── request processing
+  ├── authentication
+  ├── validation
+  ├── routing
   ├── provider call
   └── response
 ```
 
-The request ID is returned through the response and provides a correlation mechanism for future logging and observability.
+The request ID is returned through the response.
 
-This becomes increasingly important when the system eventually contains:
+This establishes the foundation for future structured logging and distributed tracing.
+
+As the system grows, the same identifier can be used to correlate activity across:
 
 ```text
 API
@@ -497,143 +442,224 @@ Provider
 External API
 ```
 
-because a single request can cross multiple components.
-
 ---
 
-# 11. Timeouts
+# Timeout / Deadline Handling
 
 External dependencies should not be allowed to wait indefinitely.
 
-Day 1 introduced explicit request-deadline handling and tested the timeout behaviour independently.
+Day 1 introduced explicit request-deadline handling.
 
-The key principle is:
+The underlying principle is:
 
-```text
-No external dependency should be allowed
-to consume an unlimited amount of time.
-```
+> No external dependency should be allowed to consume an unlimited amount of time.
 
-A timeout protects:
+Timeouts protect:
 
 * request workers
-* connection pools
+* connection resources
 * memory
 * throughput
 * user latency
 * overall service availability
 
-A dedicated timeout test was added to verify that a slow operation is correctly terminated when its deadline is exceeded.
+A dedicated timeout test verifies that a deliberately slow operation is terminated when its deadline is exceeded.
 
 ---
 
-# 12. Error Handling
+# Request Validation
 
-The gateway distinguishes between different classes of failures rather than treating every failure as the same.
+Requests are validated using Pydantic.
 
-Examples include:
+Example:
+
+```json
+{
+  "model": "fast-model",
+  "prompt": "Say hello in one sentence.",
+  "temperature": 0.2,
+  "max_tokens": 100
+}
+```
+
+Validation includes constraints such as:
+
+* required model
+* required prompt
+* temperature bounds
+* positive token limits
+* rejection of unexpected fields
+
+The goal is to reject invalid input before it reaches the provider layer.
+
+---
+
+# Error Handling
+
+The gateway establishes boundaries for several failure categories:
 
 ```text
-Validation failure
-Authentication failure
-Rate-limit failure
-Unknown model
-Provider failure
+Validation Failure
+Authentication Failure
+Rate-Limit Failure
+Unknown Model
+Provider Failure
 Timeout
-Internal application error
+Internal Application Failure
 ```
 
-The architecture keeps provider-specific behaviour inside the provider layer instead of exposing raw SDK implementation details to the API layer.
+Provider-specific implementation details remain inside the provider layer rather than being exposed directly through the API.
+
+This creates a cleaner separation between:
+
+```text
+Client-facing API contract
+```
+
+and:
+
+```text
+Internal provider implementation
+```
 
 ---
 
-# 13. Testing
+# Configuration & Secrets
 
-Testing is part of the implementation rather than something added at the end.
+Environment-specific configuration is kept outside application source code.
 
-Day 1 included:
-
-* unit testing
-* timeout testing
-* request validation testing
-* runtime endpoint testing
-* provider integration testing
-
-The project also demonstrated why the environment in which tests are executed matters.
-
-A direct command initially produced:
+For example:
 
 ```text
-ModuleNotFoundError: No module named 'app'
+GROQ_API_KEY
 ```
 
-when pytest was invoked using the wrong Python environment.
+is loaded from the environment.
 
-The corrected invocation was:
+A local `.env` file can be used during development.
 
-```bash
-uv run python -m pytest tests\test_timeout.py -v
-```
+A corresponding `.env.example` documents the expected configuration without exposing real credentials.
 
-which produced:
+### Never commit:
 
 ```text
-1 passed
+GROQ_API_KEY=<real-secret>
 ```
 
-This was an important debugging lesson:
+to Git.
 
-> A failing test does not necessarily mean the application code is wrong.
-
-The execution environment itself can be the problem.
+Groq's current documentation also recommends configuring the API key through an environment variable rather than embedding the key in application code.
 
 ---
 
-# Development Environment
+# Technology Stack
 
-The project currently uses:
+| Technology | Purpose                              |
+| ---------- | ------------------------------------ |
+| Python     | Application language                 |
+| FastAPI    | HTTP API framework                   |
+| Pydantic   | Request/response validation          |
+| Groq SDK   | LLM provider integration             |
+| uv         | Python project/dependency management |
+| pytest     | Automated testing                    |
+| Uvicorn    | ASGI development server              |
+| Git        | Version control                      |
 
-* Python
-* FastAPI
-* Pydantic
-* Groq SDK
-* pytest
-* uv
+FastAPI currently builds on Starlette for web functionality and Pydantic for data handling, and its current installation guidance supports `fastapi[standard]` with Uvicorn included in the standard server tooling.
 
-Python dependencies are managed through the project configuration and lockfile.
+The project uses `uv` with a committed `uv.lock` file. `uv` documents the lockfile as the exact resolved dependency set and recommends committing it for reproducible environments.
 
-The environment is intentionally reproducible through the project tooling rather than relying on globally installed packages.
+---
+
+# Project Structure
+
+The project is intentionally evolving.
+
+The current structure separates responsibilities around:
+
+```text
+production-ai-inference-gateway/
+│
+├── app/
+│   ├── main.py
+│   │
+│   ├── authorization.py
+│   ├── model_selector.py
+│   ├── model_service.py
+│   ├── models.py
+│   ├── routing.py
+│   ├── provider_selector.py
+│   ├── provider_service.py
+│   ├── provider_execution.py
+│   ├── rate_limit.py
+│   ├── timeout.py
+│   ├── schemas.py
+│   │
+│   └── providers/
+│       ├── base.py
+│       ├── factory.py
+│       ├── registry.py
+│       └── groq_provider.py
+│
+├── tests/
+│   └── test_timeout.py
+│
+├── .env.example
+├── .gitignore
+├── .python-version
+├── pyproject.toml
+├── requirements.txt
+├── uv.lock
+└── README.md
+```
+
+The structure is expected to evolve as additional production capabilities are introduced.
 
 ---
 
 # Running Locally
 
-## 1. Clone the repository
+## Prerequisites
 
-```bash
-git clone <repository-url>
-cd production-ai-inference-gateway
-```
+Install:
 
-## 2. Create/configure the environment
+* Python
+* uv
+* Git
+* a Groq API key
 
-Create a local environment configuration containing:
-
-```text
-GROQ_API_KEY=<your-groq-api-key>
-```
-
-Do not commit the real `.env` file.
+The project currently targets Python `>=3.12`.
 
 ---
 
-## 3. Install dependencies
+## 1. Clone the repository
 
-Using `uv`:
+```bash
+git clone https://github.com/Santa-Cruz1654/production-ai-inference-gateway.git
+cd production-ai-inference-gateway
+```
+
+---
+
+## 2. Configure the environment
+
+Create a local `.env` file:
+
+```env
+GROQ_API_KEY=your_groq_api_key
+```
+
+Never commit this file.
+
+---
+
+## 3. Sync dependencies
 
 ```bash
 uv sync
 ```
+
+`uv` keeps the environment synchronized with the project's dependency configuration and lockfile.
 
 ---
 
@@ -643,7 +669,7 @@ uv sync
 uv run uvicorn app.main:app --reload
 ```
 
-The development server runs at:
+The development server is available at:
 
 ```text
 http://127.0.0.1:8000
@@ -651,13 +677,21 @@ http://127.0.0.1:8000
 
 ---
 
-# Health Check
+# API
+
+## Health Check
+
+```http
+GET /health
+```
+
+Example:
 
 ```bash
 curl http://127.0.0.1:8000/health
 ```
 
-Expected response:
+Expected:
 
 ```json
 {
@@ -667,7 +701,11 @@ Expected response:
 
 ---
 
-# Inference Request
+## Inference
+
+```http
+POST /v1/inference
+```
 
 Example:
 
@@ -688,33 +726,35 @@ Example response:
 }
 ```
 
-The exact request ID and model response will naturally vary.
+The request ID and generated response will vary.
 
 ---
 
 # Testing
 
-Run the test suite with:
+Run the complete test suite:
 
 ```bash
 uv run python -m pytest -v
 ```
 
-For the timeout test specifically:
+Run the timeout test specifically:
 
 ```bash
 uv run python -m pytest tests\test_timeout.py -v
 ```
 
+The timeout test verifies that a slow operation is correctly terminated when its request deadline is exceeded.
+
 ---
 
-# Important Day 1 Debugging Lessons
+# Day 1 Debugging Experience
 
-Day 1 was not a straight-line implementation.
+Day 1 was deliberately developed through real implementation failures rather than building everything in one pass.
 
-Several real implementation problems occurred during development.
+Several problems occurred.
 
-## Authentication dependency mismatch
+## 1. Authentication dependency mismatch
 
 The application initially attempted to import:
 
@@ -722,17 +762,17 @@ The application initially attempted to import:
 require_user
 ```
 
-from the authorization module even though the expected implementation was not available.
+from the authorization module when the expected implementation was not available.
 
-This caused the application to fail during startup.
+This prevented the application from starting.
 
 ### Lesson
 
-Application dependency chains need to be validated after refactoring.
+Refactoring a dependency chain requires validating every import and dependency boundary.
 
 ---
 
-## Circular import
+## 2. Circular Import
 
 A refactoring introduced a dependency cycle:
 
@@ -746,27 +786,19 @@ schemas
 provider_selector
 ```
 
-This resulted in:
-
-```text
-ImportError:
-cannot import name 'ProviderSelector'
-from partially initialized module
-```
-
-The solution was to separate the schema layer from the provider-selection layer.
+This produced a partially initialized module error.
 
 ### Lesson
 
-Dependency direction matters.
+A clean architecture is not about creating many files.
 
-A clean architecture is not only about having many files; it is about ensuring that dependencies flow in a sensible direction.
+It is about creating **correct dependency direction**.
 
 ---
 
-## Missing provider configuration
+## 3. Missing Groq Configuration
 
-The application also failed when:
+The application initially failed because:
 
 ```text
 GROQ_API_KEY
@@ -774,23 +806,23 @@ GROQ_API_KEY
 
 was not configured.
 
-The application correctly surfaced:
+The application reported:
 
 ```text
 GROQ_API_KEY is not configured
 ```
 
-rather than silently creating an unusable provider.
+rather than silently constructing an unusable provider.
 
 ### Lesson
 
-Configuration failures should be explicit and fail safely.
+Configuration failures should be explicit and safe.
 
 ---
 
-## Logical model vs provider model
+## 4. Logical Model vs Provider Model Confusion
 
-An early runtime request used:
+An early request attempted to use:
 
 ```text
 openai/gpt-oss-20b
@@ -798,142 +830,197 @@ openai/gpt-oss-20b
 
 as the gateway model.
 
-The gateway rejected it with:
+The gateway returned:
 
 ```text
 Unknown model: openai/gpt-oss-20b
 ```
 
-The reason was that:
+The problem was architectural rather than provider-related.
+
+The gateway expected:
+
+```text
+fast-model
+```
+
+while:
 
 ```text
 openai/gpt-oss-20b
 ```
 
-is the provider-level model identifier, while the gateway expects logical models such as:
+was the provider-level model identifier.
 
-```text
-fast-model
-quality-model
-reasoning-model
-```
-
-The routing layer then maps the logical model to the provider model.
+The routing layer performs that translation.
 
 ### Lesson
 
-A gateway should distinguish between:
+A provider gateway should distinguish:
 
 ```text
-logical application model
+Application-facing model identity
 ```
 
-and:
+from:
 
 ```text
-provider-specific model identifier
+Provider-specific model identity
 ```
 
 ---
 
-## PowerShell / Git Bash command differences
+## 5. Windows Shell Differences
 
-Some debugging commands were also affected by the difference between Windows shells.
+Some commands behaved differently depending on whether they were executed through:
 
-A command written for one shell could fail when copied directly into another.
+```text
+PowerShell
+```
+
+or:
+
+```text
+Git Bash
+```
 
 ### Lesson
 
-The command environment is part of the development environment.
+The development shell is part of the execution environment.
+
+Commands should be written for the shell actually being used.
 
 ---
 
-## Test environment mismatch
+## 6. Pytest Environment Problem
 
-Running:
+An initial test execution produced:
 
-```bash
-uv run pytest
+```text
+ModuleNotFoundError: No module named 'app'
 ```
 
-initially resulted in pytest using a different Python installation and failing to import the application package.
+The problem was not the timeout implementation.
 
-Running:
+Pytest was being executed using a different Python environment.
+
+The working command was:
 
 ```bash
-uv run python -m pytest
+uv run python -m pytest tests\test_timeout.py -v
 ```
 
-correctly used the project's environment.
+which resulted in:
+
+```text
+tests/test_timeout.py::test_request_deadline_times_out_slow_operation PASSED
+
+1 passed
+```
 
 ### Lesson
 
-Always verify:
+When debugging Python projects, verify:
 
 ```text
 Which Python?
 Which pytest?
-Which environment?
-Which dependency installation?
+Which virtual environment?
+Which dependencies?
 ```
 
-before assuming a code failure.
+before assuming the application code is broken.
 
 ---
 
-# What Day 1 Taught Me
+# What Day 1 Actually Taught
 
-The main lesson from Day 1 was that production engineering starts **around** the core functionality.
+The most important lesson was that building an LLM integration is not the difficult part.
 
-Calling an LLM is relatively simple.
+Calling a provider API is relatively straightforward.
 
-Building the boundaries around that call is where the engineering becomes interesting.
+The engineering begins around that call.
 
-The project introduced practical experience with:
+Day 1 introduced practical experience with:
 
 * API boundaries
+* REST endpoint design
+* Pydantic validation
 * dependency injection
-* abstraction
-* provider adapters
+* provider abstraction
+* adapter-style design
 * model routing
-* configuration
+* provider registries
+* configuration management
 * authentication
 * rate limiting
-* timeouts
 * request correlation
-* error handling
-* testing
-* debugging
-* dependency management
+* timeout/deadline handling
+* error boundaries
+* unit testing
+* runtime testing
+* Python dependency management
 * environment isolation
+* debugging
+* dependency direction
+* incremental architecture
 
-Most importantly, the project was deliberately developed through:
+The development process was:
 
 ```text
 Design
-   ↓
-Implementation
-   ↓
-Runtime failure
-   ↓
-Diagnosis
-   ↓
-Refactoring
-   ↓
-Testing
-   ↓
-Working system
+  ↓
+Implement
+  ↓
+Run
+  ↓
+Fail
+  ↓
+Inspect
+  ↓
+Understand
+  ↓
+Refactor
+  ↓
+Test
+  ↓
+Verify
 ```
 
-rather than attempting to produce a large codebase in one pass.
+That process is an important part of the project.
 
 ---
 
-# Current Limitations
+# Day 1 Engineering Principles
 
-This is **not yet a complete production gateway**.
+The project follows a simple rule:
 
-The following areas remain future work:
+> **Every component must solve a real engineering problem.**
+
+The goal is not to add technologies merely to make the architecture look complicated.
+
+For example:
+
+```text
+Redis
+Kafka
+PostgreSQL
+Qdrant
+Kubernetes
+Celery
+```
+
+are not automatically valuable just because they are commonly used in production systems.
+
+They should only be introduced when the system has a requirement that justifies them.
+
+---
+
+# What Is Not Implemented Yet
+
+Day 1 establishes the foundation.
+
+The following capabilities remain future work:
 
 * bounded retry engine
 * exponential backoff
@@ -953,94 +1040,87 @@ The following areas remain future work:
 * CI/CD
 * production secret management
 * advanced authorization
-* load/performance testing
+* performance/load testing
 * production deployment
-* security hardening
+* additional security hardening
 
-These will be introduced only when there is an engineering reason for them.
+These features will be introduced incrementally rather than all at once.
 
 ---
 
-# Development Roadmap
-
-## Day 1 — Architecture & Engineering Foundations
-
-✅ FastAPI gateway
-✅ Request validation
-✅ Model abstraction
-✅ Provider abstraction
-✅ Provider registry
-✅ Provider routing
-✅ Groq integration
-✅ Authentication
-✅ Rate limiting
-✅ Request IDs
-✅ Timeout handling
-✅ Initial error handling
-✅ Unit/runtime testing
-✅ Environment configuration
-
-
-
-# Repository Structure
-
-The project is intentionally evolving.
-
-The current structure separates responsibilities around:
+# Roadmap
 
 ```text
-app/
-├── authorization
-├── model selection / resolution
-├── provider selection
-├── provider service
-├── provider execution
-├── routing
-├── rate limiting
-├── timeout handling
-├── schemas
-├── models
-├── providers/
-│   ├── base
-│   ├── registry
-│   ├── factory
-│   └── Groq provider
-└── main application
+DAY 1
+Architecture & Engineering Foundations
+        │
+        ▼
+DAY 2
+Reliability & Failure Handling
+        │
+        ▼
+Retries
+Timeouts
+Fallbacks
+Failure classification
+        │
+        ▼
+DAY 3+
+Streaming
+Usage tracking
+Observability
+Performance
+Security
+Docker
+CI/CD
+Production hardening
 ```
 
-The structure will continue to evolve as the system becomes more capable.
+The exact roadmap may evolve as implementation requirements become clearer.
 
 ---
 
-# Design Philosophy
+# Engineering Philosophy
 
-This project is not being built to maximize the number of technologies in the stack.
+This project is not designed to maximize the number of technologies in the repository.
 
-The guiding question for every new component is:
+The guiding question is:
 
 > **What engineering problem does this solve?**
 
-The goal is to progressively transform a simple LLM API wrapper into a system that demonstrates:
+The goal is to progressively transform:
+
+```text
+Simple LLM API wrapper
+```
+
+into:
+
+```text
+Reliable AI Infrastructure
+```
+
+through:
 
 ```text
 Python
-    +
+   +
 Backend Engineering
-    +
+   +
 FastAPI
-    +
+   +
 API Design
-    +
+   +
 LLM Infrastructure
-    +
+   +
 Reliability Engineering
-    +
-Distributed Systems Concepts
-    +
+   +
+Distributed Systems
+   +
 DevOps
-    +
+   +
 Security
-    +
+   +
 Observability
 ```
 
@@ -1048,38 +1128,77 @@ without introducing unnecessary complexity.
 
 ---
 
-# Learning Objective
+# Long-Term Goal
 
-By the end of the project, I want to be able to explain not only:
+The final system should demonstrate more than the ability to call an LLM.
 
-> "How does this code work?"
+It should demonstrate the ability to reason about:
 
-but also:
+```text
+Reliability
+Scalability
+Failure
+Security
+Latency
+Cost
+Observability
+Provider portability
+Testing
+Deployment
+```
 
-> "Why is it designed this way?"
+The ultimate objective is to be able to answer:
 
-> "What happens when this dependency fails?"
+> Why was this architecture chosen?
 
-> "How would this scale?"
+> What happens when a dependency fails?
 
-> "Where is the bottleneck?"
+> How would this scale?
 
-> "What would I change for production?"
+> Where is the bottleneck?
 
-> "Why did I choose this abstraction?"
+> How was the failure path tested?
 
-> "How did I test the failure path?"
+> What would change in production?
 
-> "What security risks exist?"
+> Why is this abstraction necessary?
+
+> What security risks exist?
 
 That is the standard this project is being developed against.
 
 ---
 
-# Status
+# Current Status
 
-🚧 **Active development**
+🚧 **Actively under development**
 
-Day 1 establishes the architectural foundation.
+### Day 1
 
-The system will continue evolving incrementally as new reliability, observability, deployment, and security requirements are introduced.
+**Architecture & Engineering Foundations — COMPLETE**
+
+The initial gateway is running successfully with:
+
+```text
+FastAPI
+   ↓
+Authentication
+   ↓
+Rate Limiting
+   ↓
+Validation
+   ↓
+Model Resolution
+   ↓
+Provider Routing
+   ↓
+Provider Registry
+   ↓
+Groq Adapter
+   ↓
+LLM
+   ↓
+Normalized Response
+```
+
+The foundation is now ready for the next stage of reliability engineering.
